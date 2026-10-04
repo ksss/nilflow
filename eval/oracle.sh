@@ -1,5 +1,5 @@
 #!/bin/bash
-# 課題の spec がオラクルとして使えるか: base のまま → 失敗するはず、本物の修正 → 通るはず
+# Check that a task's spec works as an oracle: it should fail on the base commit and pass with the real fix
 set -u
 [ -n "${PG_BIN:-}" ] && export PATH="$PG_BIN:$PATH"
 mkdir -p "$(cd "$(dirname "$0")" && pwd)/runs"

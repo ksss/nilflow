@@ -2,7 +2,7 @@ require "minitest/autorun"
 require "tmpdir"
 require "nilflow"
 
-# example/ (Ruby 実装 Greeter と、RBS だけの Store) を解析して、来歴・呼び出し解決・nil 受信者を確かめる
+# Analyze example/ (Greeter implemented in Ruby, Store with RBS only) and check provenance, call resolution and nil receivers
 class NilflowTest < Minitest::Test
   EXAMPLE = File.expand_path("../example", __dir__)
   GREETER = File.join(EXAMPLE, "lib/greeter.rb")
@@ -33,7 +33,7 @@ class NilflowTest < Minitest::Test
 
   def test_why_finds_nothing_after_narrowing
     out = StringIO.new
-    @q.explain(GREETER, 18, 15, io: out) # safe_greet: `return ... unless n` の後
+    @q.explain(GREETER, 18, 15, io: out) # safe_greet: after `return ... unless n`
     assert_match(/no expression .* has a nil flowing into it/, out.string)
   end
 
@@ -50,7 +50,7 @@ class NilflowTest < Minitest::Test
   end
 
   def test_type_at
-    v = @q.type_at(GREETER, 11, 4) # `n = name_for(id)` の代入式
+    v = @q.type_at(GREETER, 11, 4) # the assignment `n = name_for(id)`
     assert_equal "String?", v["types"]
     assert_equal "resolved", @q.confidence_of(v["types"])
   end

@@ -1,18 +1,18 @@
 # nilflow
 
-typeprof を**ライブラリとして**使い、その内部の型伝播グラフを SQLite に書き出す試作です。
-「この式に nil が来るのはどこからか」「この呼び出しは、受信者の型で解決するとどのメソッドに行くか」を
-SQL で問い合わせられるようにします。型注釈は書きません。
+A prototype that uses typeprof **as a library** and exports its internal type-propagation graph to SQLite.
+It lets you ask questions such as "where can the nil reaching this expression come from?" and
+"which method does this call resolve to, given the receiver's type?" in SQL. No type annotations are required.
 
-想定している使い手は、Rails アプリを調査する AI エージェントです。
-grep では分からない「受信者の型で解決した呼び出し先」と「値の来歴」を渡せば、
-調査の手戻りが減るのではないか、という仮説を検証するために作りました。
+The intended consumer is an AI agent investigating a Rails application.
+The hypothesis being tested: if an agent receives information that grep cannot give it, namely call targets
+resolved by receiver type and the provenance of values, it will need fewer investigation round-trips and make fewer wrong edits.
 
-> 状態: 実験用の試作です。gem として配布する予定はありません。
+> Status: experimental prototype. There are no plans to distribute it as a gem.
 
-## 例
+## Example
 
-`example/` には、Ruby 実装の `Greeter` と、RBS だけがある外部ライブラリ想定の `Store` があります。
+`example/` contains `Greeter`, implemented in Ruby, and `Store`, which stands in for an external library that only ships RBS.
 
 ```ruby
 # example/sig/store.rbs
@@ -32,7 +32,7 @@ class Greeter
 
   def greet(id)
     n = name_for(id)
-    "Hello " + n.upcase      # 12 行目
+    "Hello " + n.upcase      # line 12
   end
   # ...
 end
@@ -49,36 +49,36 @@ nil reaches: [113] Vertex/CallNode @ greeter.rb:12:15  : String?
               <- [20] Vertex/SigTyOptionalNode @ store.rbs:4:29  : String?
 ```
 
-ローカル変数、メソッド境界、RBS の宣言位置までさかのぼって、nil の出どころを示します。
-`unless n` などで narrowing された後の式には「nil は届かない」と答えます。
+The trace follows the nil back through a local variable and a method boundary, all the way to the RBS declaration.
+For an expression after a guard such as `unless n`, it answers that no nil can reach it.
 
-## 仕組み
+## How it works
 
-typeprof の内部表現がそのまま来歴のグラフになっています。
+typeprof's internal representation already is a provenance graph.
 
-- `Vertex#types` は `{ Type => Set[src] }` で、型ごとに「その型を持ち込んだ頂点」を保持しています。これが後ろ向きの来歴です。
-- `Vertex#next_vtxs` は型を流す先で、前向きの辺です。
-- `NilFilter` / `IsAFilter` は `if x` や `is_a?` による narrowing を辺の上で表現しています。
-- `MethodCallBox` は受信者の型から呼び出し先を解決し、`MethodDefBox#call` が実引数から仮引数へ、戻り値から呼び出し式への辺を張ります。
+- `Vertex#types` is `{ Type => Set[src] }`. For each type, it records the vertices that brought that type in. This is backward provenance.
+- `Vertex#next_vtxs` holds the vertices a type flows to. These are the forward edges.
+- `NilFilter` and `IsAFilter` represent narrowing by `if x` or `is_a?` as nodes on the edges.
+- `MethodCallBox` resolves the call target from the receiver's type. `MethodDefBox#call` adds edges from actual arguments to formal parameters and from the return value to the call expression.
 
-nilflow はこのグラフを歩いて、型ごとに分けた辺として SQLite に書き出します。
-typeprof 本体は変更せず、`prepend` を二つ当てるだけです(`lib/nilflow.rb` の冒頭)。
+nilflow walks this graph and writes it to SQLite as edges split by type.
+It does not modify typeprof itself; it only applies two `prepend`s (top of `lib/nilflow.rb`).
 
-1. `Vertex#initialize` で origin を保持します。本家では検証にだけ使われ、捨てられています。
-2. `MethodDefBox#call` と `MethodDeclBox#resolve_overloads` で、呼び出し解決の結果を記録します。本家では `MethodCallBox#run0` のローカル変数で捨てられています。
+1. Keep the origin in `Vertex#initialize`. Upstream only validates the origin and then drops it.
+2. Record call-resolution results in `MethodDefBox#call` and `MethodDeclBox#resolve_overloads`. Upstream keeps them only in a local variable inside `MethodCallBox#run0`.
 
-### テーブル
+### Tables
 
-| table | 内容 |
+| table | contents |
 |---|---|
-| `vertices` | 頂点。種別、由来の AST ノード、位置、表示用の型 |
-| `type_flow(src, dst, type, is_nil)` | 型ごとに分けた辺。`is_nil = 1` の辺だけを辿れば nil の経路になる |
-| `call_sites` | メソッド呼び出し。受信者と戻り値の頂点、NilClass がそのメソッドに応答できるか |
-| `calls` | 呼び出しの解決先。`def` は Ruby 実装、`decl` は RBS 宣言 |
-| `methods` | メソッド定義の位置 |
-| `guards` | 構文的なガード解析の結果(後述) |
+| `vertices` | Vertices: kind, originating AST node, location, displayed type |
+| `type_flow(src, dst, type, is_nil)` | Edges split by type. Following only `is_nil = 1` edges gives the nil paths |
+| `call_sites` | Method calls: receiver and return-value vertices, whether NilClass responds to the method |
+| `calls` | Resolved call targets: `def` for a Ruby implementation, `decl` for an RBS declaration |
+| `methods` | Locations of method definitions |
+| `guards` | Results of the syntactic guard analysis (see below) |
 
-`why` の中身は、再帰 CTE 一本です。
+`why` is a single recursive CTE:
 
 ```sql
 WITH RECURSIVE back(id, depth) AS (
@@ -90,75 +90,75 @@ WITH RECURSIVE back(id, depth) AS (
 SELECT ... FROM back
 ```
 
-## 使い方
+## Usage
 
 ```sh
 bundle install
 bundle exec exe/nilflow build app lib --collection rbs_collection.yaml -o graph.db
 ```
 
-| コマンド | 内容 |
+| command | description |
 |---|---|
-| `why FILE:LINE:COL [--type T]` | その式に nil(または型 T)が来る経路を木で表示 |
-| `callers 'Klass#mid'` | 受信者の型で解決した呼び出し元。解決できなかった同名の呼び出しの数も示す |
-| `callees FILE:LINE` | その行の各呼び出しの受信者型、解決先、確度 |
-| `type-at FILE:LINE:COL` | その位置の式の型と確度 |
-| `summary FILE[:FROM:TO]` | ファイルの呼び出しを 1 行ずつ要約(エージェントへの自動注入用) |
-| `nil-receivers [--all]` | 受信者が nil になり得て、ガードされていない呼び出し |
-| `stats` | 呼び出し単位のカバレッジ |
+| `why FILE:LINE:COL [--type T]` | Show, as a tree, the paths by which nil (or type T) reaches the expression |
+| `callers 'Klass#mid'` | Call sites resolved to the method by receiver type, plus the number of same-named calls that could not be resolved |
+| `callees FILE:LINE` | For each call on the line: receiver type, resolved targets, confidence |
+| `type-at FILE:LINE:COL` | Type and confidence of the expression at that position |
+| `summary FILE[:FROM:TO]` | One line per call in the file (used for automatic injection into an agent's context) |
+| `nil-receivers [--all]` | Calls whose receiver may be nil and is not guarded |
+| `stats` | Coverage, counted per call |
 
-列番号は 0 始まりです。相対パスは `NILFLOW_ROOT`(既定はカレントディレクトリ)を基準に解決します。
-確度は、`[resolved]` が受信者の型がすべて分かっている、`[partial]` が一部 untyped、`[unknown]` が型情報なし、です。
+Columns are 0-based. Relative paths are resolved against `NILFLOW_ROOT` (default: the current directory).
+Confidence is `[resolved]` when all receiver types are known, `[partial]` when some paths are untyped, and `[unknown]` when there is no type information.
 
 ```sh
 bundle exec rake test
 ```
 
-## mastodon での計測
+## Measurements on mastodon
 
-mastodon の `app/` と `lib/` を、型注釈なしで解析しました。gem の RBS は `rbs collection` で入れています。
+We analyzed mastodon's `app/` and `lib/` without any type annotations. Gem signatures come from `rbs collection`.
 
-| 対象 | 行数 | typeprof 解析 | 受信者に型あり | 呼び出し先が解決 |
+| target | lines | typeprof analysis | receiver typed | call target resolved |
 |---|---|---|---|---|
-| mastodon app/ + lib/ | 72,262 | 14 秒 | 62% | 39% |
-| ruby/rbs lib/ | 23,677 | 1.6 秒 | 74% | 57% |
+| mastodon app/ + lib/ | 72,262 | 14 s | 62% | 39% |
+| ruby/rbs lib/ | 23,677 | 1.6 s | 74% | 57% |
 
-書き出しは、今は 1 行ずつ INSERT しているので、mastodon で 20〜30 秒かかります。
+Exporting currently inserts one row at a time and takes 20–30 s on mastodon.
 
-nil が来得る受信者は 806 件ありました。ランダムに 20 件を目で確認したところ、来歴が示す nil の出どころはすべて正しいものでした。
-一方で、実際に問題になる nil は 0 件でした。主な原因はインスタンス変数や `present?` によるガードです。
-`lib/nilflow/guards.rb` で構文的なガード解析を足しても、806 件は 699 件にしか減りませんでした。
-残りの多くは、別のメソッドで設定されるインスタンス変数への暗黙の依存か、nil 以外の経路が untyped のものです。
+There were 806 calls whose receiver may be nil. In a random sample of 20, the nil origin reported by the provenance trace was correct every time.
+However, none of the 20 was a real problem. Most were guarded by instance-variable checks or `present?`.
+Adding a syntactic guard analysis (`lib/nilflow/guards.rb`) only reduced the 806 to 699.
+Most of the remainder are either implicit dependencies on instance variables set by another method, or receivers whose non-nil paths are untyped.
 
-## AI エージェントでの評価実験
+## Evaluation with an AI agent
 
-mastodon の過去のバグ修正 5 件を課題にして、Claude Code をヘッドレスで動かしました。
-道具なし、CLI の説明のみ、フックで自動注入、フックで使用を強制、人手で書いた理想的な解析結果を注入、の 5 条件を比べています。
-結果の要点は次の通りです。詳細は [eval/README.md](eval/README.md) にあります。
+We ran Claude Code headless on five past bug fixes from mastodon.
+Five conditions were compared: no tool, CLI documentation only, automatic injection via a hook, mandatory use enforced by a hook, and injection of hand-written "ideal" analysis results.
+The key findings are below; see [eval/README.md](eval/README.md) for details.
 
-- 原因のファイルには、どの条件でも 1〜2 手でたどり着きました。この課題の作り方では、場所の特定に差が出る余地がありませんでした。
-- CLI の説明を渡すだけでは、nilflow は一度も使われませんでした。
-- フックで注入や強制をしても、修正の正しさは変わりませんでした。バグの核心にある式が ActiveRecord の属性やインスタンス変数を経由していて、nilflow は `untyped [unknown]` と答えていたからです。
-- 理想的な解析結果を注入すると、エージェントは grep では気づかなかった欠陥を正しく言い当てました。それでも「最小限の修正」という指示に従って、その欠陥は直しませんでした。
+- Under every condition, the agent reached the faulty file within one or two steps. With these tasks, there was no room for a difference in localization.
+- With only the CLI documentation, nilflow was never used.
+- Injecting or enforcing nilflow did not change the correctness of the fixes. The key expressions went through ActiveRecord attributes or instance variables, and nilflow answered `untyped [unknown]` for them.
+- With ideal analysis results injected, the agent correctly identified a defect it had not noticed with grep alone. It still did not fix that defect, following the instruction to keep the fix minimal.
 
-## typeprof について気づいたこと
+## Notes on typeprof
 
-ライブラリとして使ってみて、気づいた点です。
+Things noticed while using typeprof as a library:
 
-- **origin が残らない。** `Vertex.new(origin)` は origin を検証するだけで保持しません。来歴を位置つきで出すには、origin の保持が必要でした。
-- **呼び出し解決の結果を取り出す口がない。** `MethodCallBox#run0` の中で解決した `MethodDefBox` / `MethodDeclBox` は、ローカル変数に入るだけです。コールグラフを作るために、`MethodDefBox#call` と `MethodDeclBox#resolve_overloads` に `prepend` しています。
-- **Filter が前段を覚えていない。** `NilFilter` などは `next_vtx` しか持たないので、前段の頂点の `next_vtxs` から逆引きしています。
-- **narrowing はローカル変数だけ。** `if x` の `x` が `LocalVariableReadNode` の場合にだけ効きます(`core/ast/control.rb`)。Rails のコードではインスタンス変数と `present?` によるガードが多く、nil の偽陽性の主な原因になっていました。
-- **同じ呼び出し式に、範囲の重なる頂点が二つある。** 一方は `String`、もう一方は `String?` になることがあり、位置から型を引くときに曖昧になります。
-- **`ruby/rbs` の `sig/` を読ませると落ちる。** `SigTyBaseBottomNode#typecheck`(`core/ast/sig_type.rb`)で `vtx` が nil になります。`Location[bot, bot]?` のような型引数の `bot` が関係していそうですが、最小の再現はまだ作れていません。
+- **The origin is not retained.** `Vertex.new(origin)` only validates the origin. Retaining it was necessary to report provenance with locations.
+- **There is no way to get call-resolution results.** The `MethodDefBox` / `MethodDeclBox` resolved inside `MethodCallBox#run0` only live in a local variable. To build the call graph, nilflow prepends to `MethodDefBox#call` and `MethodDeclBox#resolve_overloads`.
+- **Filters do not remember their predecessor.** `NilFilter` and friends only hold `next_vtx`, so nilflow finds the predecessor by scanning the `next_vtxs` of vertices.
+- **Narrowing only applies to local variables.** It takes effect only when `x` in `if x` is a `LocalVariableReadNode` (`core/ast/control.rb`). Rails code guards heavily with instance variables and `present?`, which was the main source of nil false positives.
+- **A call expression can have two vertices with overlapping ranges.** One may be `String` and the other `String?`, which makes looking up a type by position ambiguous.
+- **Loading `ruby/rbs`'s `sig/` crashes.** `vtx` is nil in `SigTyBaseBottomNode#typecheck` (`core/ast/sig_type.rb`). A `bot` type argument, as in `Location[bot, bot]?`, looks related, but there is no minimal reproduction yet.
 
-## 分かっている制約
+## Known limitations
 
-- union を使い、パスを区別しない解析です。nil が union に入ると、その先全体に「来得る」と出ます。
-- `IsAFilter` と `BotFilter` は、すべての型を通す近似で扱っています。
-- 頂点の ID は実行ごとに振り直します。差分更新には向きません。
-- RBS collection の `type: rubygems` の gem は、nilflow 自身の bundle から見えるものだけを読みます。
-- typeprof 0.33.2 の内部クラスに依存しています。
+- The analysis is union-based and path-insensitive. Once nil enters a union, everything downstream reports that nil "may" arrive.
+- `IsAFilter` and `BotFilter` are approximated as letting every type through.
+- Vertex IDs are reassigned on every run, so the database is not suited to incremental updates.
+- For RBS collection gems with `type: rubygems`, only gems visible from nilflow's own bundle are loaded.
+- nilflow depends on internal classes of typeprof 0.33.2.
 
 ## License
 

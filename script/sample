@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# nil-receivers (ガード済みを除く) からランダムに N 件取り、ソース行と nil の源を添えて表示する。目視確認用。
+# Pick N random unguarded nil-receivers and show each with its source line and nil origins. For manual inspection.
 #   NILFLOW_ROOT=/path/to/app bundle exec script/sample graph.db [N=20] [SEED=1]
 require_relative "../lib/nilflow"
 db, n, seed = ARGV[0], (ARGV[1] || 20).to_i, (ARGV[2] || 1).to_i

@@ -2,7 +2,7 @@
 /vendor/
 *.db
 *.db-journal
-# 評価ハーネスの生成物 (作業木、解析 DB、transcript、ラッパー)
+# Artifacts of the evaluation harness (worktrees, analysis DBs, transcripts, wrappers)
 /eval/wt/
 /eval/db/
 /eval/runs/

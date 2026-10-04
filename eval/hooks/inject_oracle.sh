@@ -1,12 +1,12 @@
 #!/bin/bash
-# 条件 E: 正解ファイルに触れたら、人手で書いた「理想の注」(事実のみ) を一度だけ添える。
+# Condition E: when the ground-truth file is touched, attach the hand-written "ideal" note (facts only) once.
 input=$(cat); [ -n "${NILFLOW_HOOK_LOG:-}" ] && echo "IN $(date +%T) ${input:0:200}" >> "$NILFLOW_HOOK_LOG"
 python3 - "$input" <<'PY'
 import json, re, sys, os
 d = json.loads(sys.argv[1]); tool = d.get("tool_name"); ti = d.get("tool_input") or {}
 root = os.environ["NILFLOW_ROOT"]; note_file = os.environ["NILFLOW_ORACLE_NOTE"]; log = os.environ.get("NILFLOW_HOOK_LOG")
 note = open(note_file).read()
-gt = re.search(r"\] (\S+) ", note).group(1)  # 注の 1 行目にある対象ファイル
+gt = re.search(r"\] (\S+) ", note).group(1)  # target file named on the first line of the note
 touched = []
 if tool == "Read": touched = [ti.get("file_path", "")]
 elif tool == "Bash": touched = re.findall(r"(?:app|lib)/[A-Za-z0-9_/.-]+\.rb", ti.get("command", ""))

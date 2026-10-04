@@ -1,4 +1,4 @@
-# 外部ライブラリ想定: Ruby の実装はなく RBS だけがある
+# Stands in for an external library: no Ruby implementation, only RBS
 class Store
   def initialize: () -> void
   def fetch: (String key) -> String?

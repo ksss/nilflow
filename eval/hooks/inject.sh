@@ -1,6 +1,6 @@
 #!/bin/bash
-# 条件 C: PostToolUse (Read / Bash)。触ったファイルの nilflow 要約を additionalContext として添える。
-# 環境変数: NILFLOW_DB, NILFLOW_ROOT (作業木), NILFLOW_DIR (nilflow のディレクトリ)
+# Condition C: PostToolUse (Read / Bash). Attach the nilflow summary of touched files as additionalContext.
+# Environment: NILFLOW_DB, NILFLOW_ROOT (worktree), NILFLOW_DIR (nilflow directory)
 input=$(cat); [ -n "${NILFLOW_HOOK_LOG:-}" ] && echo "IN $(date +%T) ${input:0:300}" >> "$NILFLOW_HOOK_LOG"
 python3 - "$input" <<'PY'
 import json, re, subprocess, sys, os

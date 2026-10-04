@@ -5,19 +5,19 @@ require "yaml"
 require_relative "nilflow/guards"
 require "pathname"
 
-# Nilflow: typeprof の型伝播グラフを SQLite に書き出し、「nil はどこから来たか」を問う試作。
+# Nilflow: a prototype that exports typeprof's type-propagation graph to SQLite and asks "where does this nil come from?".
 #
-# typeprof の内部では
-#   Vertex#types   : { Type => Set[src] }   … この型を持ち込んだ元 (後ろ向きの来歴)
-#   Vertex#next_vtxs : Set[Vertex|Filter|Box] … 型を流す先 (前向き)
-# が保持されている。Nilflow はこれを
-#   type_flow(src, dst, type)  … 型ごとに分かれた辺
-#   calls(call_site → target)  … MethodCallBox が解決した呼び出し先
-# として SQLite に落とす。
+# Inside typeprof,
+#   Vertex#types     : { Type => Set[src] }    ... the vertices that brought each type in (backward provenance)
+#   Vertex#next_vtxs : Set[Vertex|Filter|Box] ... where types flow to (forward)
+# are kept. Nilflow writes them to SQLite as
+#   type_flow(src, dst, type)  ... edges split by type
+#   calls(call_site -> target) ... call targets resolved by MethodCallBox
+#
 module Nilflow
-  # --- typeprof へのパッチ ---------------------------------------------------
+  # --- Patches to typeprof ---------------------------------------------------------
 
-  # Vertex は origin を検証するだけで保持しない ("just for debug") ので、保持させる。
+  # Vertex only validates its origin and does not keep it ("just for debug"), so make it keep it.
   module VertexOrigin
     def initialize(origin)
       super
@@ -27,7 +27,7 @@ module Nilflow
   end
   TypeProf::Core::Vertex.prepend(VertexOrigin)
 
-  # 呼び出し解決の結果は run0 のローカル変数で捨てられるので、ここで横取りする。
+  # Call-resolution results are dropped as local variables in run0, so intercept them here.
   CALLS = {} # [call_node, target_box] => true
 
   module RecordDefCall
@@ -46,9 +46,9 @@ module Nilflow
   end
   TypeProf::Core::MethodDeclBox.prepend(RecordDeclCall)
 
-  # --- 解析 ------------------------------------------------------------------
+  # --- Analysis -------------------------------------------------------------------
 
-  # dirs: 解析対象ディレクトリ (複数可)。collection: rbs_collection.yaml のパス (nil なら読まない)
+  # dirs: directories to analyze (one or more). collection: path to rbs_collection.yaml (nil to skip)
   def self.analyze(dirs, collection: nil)
     options = { rbs_collection: load_collection(collection), position_encoding: Encoding::UTF_8 }
     service = TypeProf::Core::Service.new(options)
@@ -56,14 +56,14 @@ module Nilflow
     service
   end
 
-  # typeprof CLI の setup_rbs_collection と同じ手順で lockfile を読む
+  # Read the lockfile the same way as typeprof CLI's setup_rbs_collection
   def self.load_collection(path)
     return nil unless path
     lock_path = RBS::Collection::Config.to_lockfile_path(Pathname(path))
     raise "lockfile not found: #{lock_path}; run 'rbs collection install'" unless File.readable?(lock_path)
     data = YAML.load_file(lock_path)
-    # type: rubygems は「インストール済み gem 同梱の sig/」を指すが、Bundler 配下では
-    # この Gemfile にない gem は見えない。見つからないものは警告して外す (実験用の割り切り)。
+    # `type: rubygems` refers to the sig/ bundled with an installed gem, but under Bundler a gem not in this
+    # Gemfile is invisible. Warn and skip such gems (a shortcut acceptable for an experiment).
     data["gems"] = data["gems"].reject do |g|
       next false unless g.dig("source", "type") == "rubygems"
       begin
@@ -77,16 +77,16 @@ module Nilflow
     RBS::Collection::Config::Lockfile.from_lockfile(lockfile_path: lock_path, data: data)
   end
 
-  # --- エクスポート ----------------------------------------------------------
+  # --- Export ---------------------------------------------------------------------
 
   class Exporter
     SCHEMA = <<~SQL
       CREATE TABLE vertices (
         id INTEGER PRIMARY KEY,
         kind TEXT NOT NULL,        -- Vertex / Source / NilFilter / IsAFilter
-        origin TEXT,               -- 由来の種別 (AST ノードのクラス名など)
+        origin TEXT,               -- kind of origin (class name of the AST node, etc.)
         path TEXT, line INTEGER, col INTEGER, end_line INTEGER, end_col INTEGER,
-        types TEXT                 -- typeprof が表示する型 (参考用)
+        types TEXT                 -- type as displayed by typeprof (for reference)
       );
       CREATE TABLE type_flow (
         src INTEGER NOT NULL, dst INTEGER NOT NULL,
@@ -99,10 +99,10 @@ module Nilflow
         id INTEGER PRIMARY KEY,
         path TEXT, line INTEGER, col INTEGER, end_line INTEGER, end_col INTEGER,
         mid TEXT NOT NULL,
-        mid_line INTEGER, mid_col INTEGER, -- メソッド名の位置 (同じ開始位置に並ぶ連鎖呼び出しを区別する)
-        recv INTEGER NOT NULL,     -- 受信者 Vertex
-        ret INTEGER NOT NULL,      -- 戻り値 Vertex
-        nil_responds INTEGER NOT NULL -- NilClass (と祖先) がこの mid を持つなら 1
+        mid_line INTEGER, mid_col INTEGER, -- position of the method name (distinguishes chained calls sharing a start position)
+        recv INTEGER NOT NULL,     -- receiver vertex
+        ret INTEGER NOT NULL,      -- return-value vertex
+        nil_responds INTEGER NOT NULL -- 1 if NilClass (or an ancestor) has this method
       );
       CREATE TABLE methods (
         path TEXT, line INTEGER, end_line INTEGER,
@@ -113,13 +113,13 @@ module Nilflow
       CREATE TABLE guards (
         path TEXT, line INTEGER, col INTEGER, mid TEXT,
         mid_line INTEGER, mid_col INTEGER,
-        key TEXT,                  -- 受信者の式 (同一視キー)。nil なら副作用のある式
-        guarded_by TEXT            -- 支配するガード条件のソース。nil なら未ガード
+        key TEXT,                  -- receiver expression (identity key); NULL for expressions with side effects
+        guarded_by TEXT            -- source of the dominating guard; NULL if unguarded
       );
       CREATE INDEX guards_pos ON guards(path, mid_line, mid_col, mid);
       CREATE TABLE calls (
         call_site INTEGER NOT NULL,
-        target_kind TEXT NOT NULL, -- def (Ruby 実装) / decl (RBS 宣言)
+        target_kind TEXT NOT NULL, -- def (Ruby implementation) / decl (RBS declaration)
         target TEXT NOT NULL,      -- Klass#mid
         path TEXT, line INTEGER
       );
@@ -131,7 +131,7 @@ module Nilflow
       File.delete(db_path) if File.exist?(db_path)
       @db = SQLite3::Database.new(db_path)
       @ids = {}.compare_by_identity
-      @node_of_ret = {}.compare_by_identity # Source/Vertex => AST::Node (node.ret 経由)
+      @node_of_ret = {}.compare_by_identity # Source/Vertex => AST::Node (via node.ret)
       @call_boxes = []
     end
 
@@ -151,7 +151,7 @@ module Nilflow
       @db
     end
 
-    # 構文的ガード解析 (Nilflow::Guards) の結果を書く。解析対象は解析済み .rb ファイル全部
+    # Write the results of the syntactic guard analysis (Nilflow::Guards) for every analyzed .rb file
     def export_guards
       paths = @service.instance_variable_get(:@rb_text_nodes).keys
       stmt = @db.prepare("INSERT INTO guards VALUES (?,?,?,?,?,?,?,?)")
@@ -181,8 +181,8 @@ module Nilflow
       end
     end
 
-    # ChangeSet#edges は { src => { dst => true } }。Box 内で Source.new された頂点は
-    # ここにしか現れないので、その ChangeSet を持つ AST ノードを位置として採用する。
+    # ChangeSet#edges is { src => { dst => true } }. Vertices created by Source.new inside a Box only
+    # appear here, so use the AST node owning that ChangeSet as their location.
     def note_edge_sources(changes, node)
       changes.edges.each_key { |src| @node_of_ret[src] ||= node }
     end
@@ -190,11 +190,11 @@ module Nilflow
     def each_box(changes, &blk)
       changes.boxes.each_value do |box|
         yield box
-        each_box(box.changes, &blk) # Box の中で作られた Box (symbol proc など)
+        each_box(box.changes, &blk) # Boxes created inside a Box (symbol procs, etc.)
       end
     end
 
-    # グラフを前後両方向に辿り、見つけた頂点と辺をすべて書き出す
+    # Walk the graph in both directions and write every vertex and edge found
     def walk(seeds)
       queue = seeds.compact
       seen = Set.new.compare_by_identity
@@ -212,13 +212,13 @@ module Nilflow
           end
           v.next_vtxs.each { |n| queue << n unless n.is_a?(TypeProf::Core::Box) }
         when TypeProf::Core::Filter
-          # Filter は前段を覚えていないので、前段の next_vtxs から逆引きする (下のループ)
+          # A Filter does not remember its predecessor; find it from predecessors' next_vtxs (loop below)
           queue << v.next_vtx
         when TypeProf::Core::Source
-          # Source は辺を持たない (後続の Vertex#types から到達済み)
+          # A Source has no edges (already reached via the following Vertex#types)
         end
       end
-      # Vertex → Filter の辺: Filter を通過できる型だけを流したとみなす
+      # Vertex -> Filter edges: assume only the types that pass the Filter flow
       seen.each do |v|
         next unless v.is_a?(TypeProf::Core::Vertex)
         v.next_vtxs.each do |f|
@@ -226,7 +226,7 @@ module Nilflow
           when TypeProf::Core::NilFilter
             v.types.each_key { |ty| insert_flow(v, f, ty) unless f.filter([ty], @genv.nil_type).empty? }
           when TypeProf::Core::Filter
-            v.types.each_key { |ty| insert_flow(v, f, ty) } # IsAFilter/BotFilter は近似: 全型を通す
+            v.types.each_key { |ty| insert_flow(v, f, ty) } # IsAFilter/BotFilter approximated: let every type through
           end
         end
       end
@@ -249,7 +249,7 @@ module Nilflow
       end
     end
 
-    # 頂点の由来と位置 [path, line, col, end_line, end_col]
+    # Origin and location of a vertex [path, line, col, end_line, end_col]
     def describe(v)
       origin =
         case v
@@ -275,17 +275,17 @@ module Nilflow
     def loc_of(node)
       cr = node.code_range
       path = node.lenv.file_context.path
-      # core RBS など FileContext に path がない場合は RBS の buffer 名で代用する
+      # When FileContext has no path (e.g. core RBS), fall back to the RBS buffer name
       raw = node.instance_variable_get(:@raw_node)
       path ||= raw.location.buffer.name.to_s if raw.respond_to?(:location) && raw.location
-      # ASCII-8BIT の文字列は sqlite3 gem が BLOB として保存してしまうので UTF-8 に揃える
+      # The sqlite3 gem stores ASCII-8BIT strings as BLOBs, so force UTF-8
       [utf8(path), cr.first.lineno, cr.first.column, cr.last.lineno, cr.last.column]
     rescue StandardError
       [nil] * 5
     end
 
-    # NilClass とその祖先 (Object, Kernel, BasicObject, include されたモジュール) が mid を持つか。
-    # MethodCallBox#resolve の祖先探索を簡略化したもの。
+    # Whether NilClass or its ancestors (Object, Kernel, BasicObject, included modules) have mid.
+    # A simplified version of the ancestor lookup in MethodCallBox#resolve.
     def nil_responds?(mid)
       @nil_responds ||= {}
       return @nil_responds[mid] if @nil_responds.key?(mid)
@@ -331,7 +331,7 @@ module Nilflow
     end
   end
 
-  # --- 問い合わせ ------------------------------------------------------------
+  # --- Queries --------------------------------------------------------------------
 
   class Query
     def initialize(db_path)
@@ -339,8 +339,8 @@ module Nilflow
       @db.results_as_hash = true
     end
 
-    # 受信者が nil になり得る呼び出し (NoMethodError 候補)。
-    # 既定では構文的ガード (guards 表) で守られているものを除く。
+    # Calls whose receiver may be nil (NoMethodError candidates).
+    # By default, calls protected by a syntactic guard (guards table) are excluded.
     def nil_receivers(include_guarded: false)
       cond = include_guarded ? "" : "AND g.guarded_by IS NULL"
       @db.execute(<<~SQL)
@@ -354,7 +354,7 @@ module Nilflow
       SQL
     end
 
-    # 位置に重なる頂点のうち、nil が流れ込んでいる最小のもの
+    # The smallest vertex at the position that nil flows into
     def vertex_at(path, line, col)
       @db.get_first_row(<<~SQL, [path, line, line, col, line, line, col])
         SELECT v.* FROM vertices v
@@ -367,7 +367,7 @@ module Nilflow
       SQL
     end
 
-    # nil だけを運ぶ辺を逆向きに辿った到達集合 (再帰 CTE)
+    # Vertices reachable backward along edges that carry nil only (recursive CTE)
     def nil_origin_edges(vertex_id, max_depth: 64)
       @db.execute(<<~SQL, [vertex_id, max_depth])
         WITH RECURSIVE back(id, depth) AS (
@@ -383,17 +383,17 @@ module Nilflow
       SQL
     end
 
-    # カバレッジ指標。呼び出し (method call) 単位で数える
+    # Coverage, counted per method call
     def stats
       q = ->(sql) { @db.get_first_value(sql) }
       total = q.("SELECT count(*) FROM call_sites")
       {
         call_sites: total,
-        # 受信者に何らかの型が流れ込んでいる (空頂点ではない)
+        # some type flows into the receiver (not an empty vertex)
         recv_typed: q.("SELECT count(*) FROM call_sites cs WHERE EXISTS (SELECT 1 FROM type_flow tf WHERE tf.dst = cs.recv)"),
-        # 受信者の型に untyped が混ざる
+        # the receiver's type includes untyped
         recv_has_untyped: q.("SELECT count(*) FROM call_sites cs JOIN vertices v ON v.id = cs.recv WHERE v.types LIKE '%untyped%'"),
-        # 呼び出し先が 1 つ以上解決した
+        # at least one call target was resolved
         resolved: q.("SELECT count(DISTINCT call_site) FROM calls"),
         resolved_to_def: q.("SELECT count(DISTINCT call_site) FROM calls WHERE target_kind = 'def'"),
         resolved_to_decl: q.("SELECT count(DISTINCT call_site) FROM calls WHERE target_kind = 'decl'"),
@@ -417,9 +417,9 @@ module Nilflow
       SQL
     end
 
-    # --- エージェント向け --------------------------------------------------
+    # --- For agents -----------------------------------------------------------------
 
-    # 位置を含む最も内側のメソッド名
+    # Innermost method containing the position
     def method_at(path, line)
       @db.get_first_value(<<~SQL, [path, line, line])
         SELECT name FROM methods WHERE path = ? AND line <= ? AND end_line >= ?
@@ -427,13 +427,13 @@ module Nilflow
       SQL
     end
 
-    # 受信者の確度: resolved (型あり・untyped なし) / partial (untyped 混在) / unknown (型情報なし)
+    # Receiver confidence: resolved (typed, no untyped) / partial (some untyped) / unknown (no type info)
     def confidence_of(types)
       return "unknown" if types.nil? || types.empty? || types == "untyped"
       types.include?("untyped") ? "partial" : "resolved"
     end
 
-    # Klass#mid を呼んでいる箇所 (型解決済みの呼び出しのみ。未解決の同名呼び出しは別に数える)
+    # Call sites of Klass#mid (type-resolved calls only; unresolved same-named calls are counted separately)
     def callers(target)
       rows = @db.execute(<<~SQL, [target])
         SELECT DISTINCT cs.path, cs.line, cs.col, cs.mid, v.types, c.path AS def_path, c.line AS def_line
@@ -448,7 +448,7 @@ module Nilflow
       [rows, unresolved]
     end
 
-    # FILE:LINE にある呼び出しと、その解決先
+    # Calls on FILE:LINE and their resolved targets
     def callees(path, line)
       @db.execute(<<~SQL, [path, line])
         SELECT cs.id, cs.col, cs.mid, v.types,
@@ -460,7 +460,7 @@ module Nilflow
       SQL
     end
 
-    # 位置に重なる最小の頂点 (型が付いているもの)
+    # Smallest typed vertex at the position
     def type_at(path, line, col)
       @db.get_first_row(<<~SQL, [path, line, line, col, line, line, col])
         SELECT v.* FROM vertices v
@@ -471,7 +471,7 @@ module Nilflow
       SQL
     end
 
-    # 任意の型の来歴 (why の一般化)。type は vertices.types/type_flow.type の表示文字列
+    # Provenance of any type (generalization of why). type is the displayed string in vertices.types/type_flow.type
     def origin_edges(vertex_id, type, max_depth: 64)
       @db.execute(<<~SQL, [vertex_id, type, max_depth, type])
         WITH RECURSIVE back(id, depth) AS (
@@ -488,8 +488,8 @@ module Nilflow
     def rel(path) = path&.sub(%r{\A#{Regexp.escape(@root || '')}/?}, "")
     attr_accessor :root
 
-    # ファイル (行範囲) の要約: 呼び出しごとに受信者型・解決先・確度・nil 流入を 1 行で。
-    # フックで tool 結果に添えるために、grep では分からない情報 (他ファイルへの解決先、nil 流入) を優先して並べる。
+    # Summary of a file (or line range): one line per call with receiver type, targets, confidence and nil inflow.
+    # Meant to be attached to tool results by a hook, so information grep cannot give (cross-file targets, nil inflow) comes first.
     def summary(path, from = nil, to = nil, limit: 40)
       cond = from ? "AND cs.line BETWEEN ? AND ?" : ""
       binds = from ? [path, from, to] : [path]
@@ -514,7 +514,7 @@ module Nilflow
         ty = ty[0, 70] + "…" if ty.size > 70
         [r, "L#{r['line']} .#{r['mid']} recv=#{ty} [#{conf}] -> #{tgt}#{flag}"]
       end
-      # 優先度: nil 流入 > 他ファイルの def に解決 > その他。上限を超えたら残りは件数だけ
+      # Priority: nil inflow > resolved to a def in another file > others. Beyond the limit, only a count is shown
       ranked = lines.sort_by { |r, _| [r["nil_in"] == 1 ? 0 : 1, (r["targets"].to_s.include?(" def ") && !r["targets"].to_s.include?(path)) ? 0 : 1, r["line"]] }
       shown = ranked.first(limit).sort_by { |r, _| r["line"] }.map(&:last)
       shown << "(#{lines.size - limit} more calls omitted)" if lines.size > limit
@@ -523,7 +523,7 @@ module Nilflow
       [header, *shown]
     end
 
-    # 来歴を木として表示する
+    # Print provenance as a tree
     def explain(path, line, col, io: $stdout)
       v = vertex_at(path, line, col)
       if v.nil?

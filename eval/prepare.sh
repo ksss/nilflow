@@ -1,7 +1,7 @@
 #!/bin/bash
-# 各課題の base コミットで worktree を作り、gem・nilflow DB・テスト DB を用意する
+# Create a worktree at each task's base commit, and set up gems, the nilflow DB and the test DB
 #   MASTODON_DIR=/path/to/mastodon [PG_BIN=/path/to/postgres/bin] eval/prepare.sh
-# MASTODON_DIR には rbs_collection.yaml / .lock.yaml / .gem_rbs_collection と .env.test を用意しておくこと
+# MASTODON_DIR must contain rbs_collection.yaml / .lock.yaml / .gem_rbs_collection and .env.test
 set -u
 : "${MASTODON_DIR:?set MASTODON_DIR to a mastodon checkout}"
 [ -n "${PG_BIN:-}" ] && export PATH="$PG_BIN:$PATH"
@@ -13,12 +13,12 @@ for yaml in "$EVAL"/tasks/*.yaml; do
   echo "=== $id ($base)"
   if [ ! -d "$wt" ]; then (cd "$MAST" && git worktree add --detach "$wt" "$base" >/dev/null 2>&1) || { echo "worktree failed"; continue; }; fi
   cp "$MAST/.env.test" "$wt/.env.test" 2>/dev/null
-  # rbs collection は mastodon 側で未追跡なのでコピーする
+  # rbs collection files are untracked in mastodon, so copy them
   cp "$MAST/rbs_collection.yaml" "$MAST/rbs_collection.lock.yaml" "$wt/"
   ln -sfn "$MAST/.gem_rbs_collection" "$wt/.gem_rbs_collection"
-  # 古い Gemfile.lock は platform を含まないことがある。正規化して入れ、エージェントの git status には出さない
+  # Old Gemfile.lock files may lack platforms. Normalize them, and hide the change from the agent's git status
   (cd "$wt" && (bundle check >/dev/null 2>&1 || { bundle lock --normalize-platforms >/dev/null 2>&1; bundle install --quiet 2>&1 | tail -2; }) && git update-index --skip-worktree Gemfile.lock)
-  # エージェントから見えないよう、追加したファイルは .git/info/exclude に入れる
+  # Hide the added files from the agent via .git/info/exclude
   (cd "$wt" && { echo .gem_rbs_collection; echo rbs_collection.yaml; echo rbs_collection.lock.yaml; } >> "$(git rev-parse --git-path info/exclude)")
   if [ ! -f "$EVAL/db/$id.db" ]; then
     (cd "$NF" && bundle exec exe/nilflow build "$wt/app" "$wt/lib" --collection "$wt/rbs_collection.yaml" -o "$EVAL/db/$id.db" 2>&1 | grep -E "analyze|wrote")

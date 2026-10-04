@@ -2,22 +2,22 @@ require "prism"
 require "set"
 
 module Nilflow
-  # 構文的な nil ガード解析。
+  # Syntactic nil-guard analysis.
   #
-  # typeprof の narrowing は `if x` の x がローカル変数の時だけ効く (control.rb の LocalVariableReadNode 判定)。
-  # Rails コードで多い「ivar のガード」「present?/blank?」「attr_reader へのガード」を、
-  # 型とは独立に Prism の構文木だけで判定し、呼び出し単位で「受信者がガード済みか」を出す。
+  # typeprof's narrowing only applies when x in `if x` is a local variable (the LocalVariableReadNode check in control.rb).
+  # Guards common in Rails code (on ivars, by present?/blank?, on attr_reader calls) are decided here
+  # from the Prism syntax tree alone, independently of types, and reported per call as "is the receiver guarded?".
   #
-  # 判定は支配関係のみ (path-sensitive ではない)。受信者の "キー" は
+  # Only dominance is considered (not path-sensitive). The receiver "key" is the source text of an expression
   #   @ivar / local / bare_call / recv.bare_call ...
-  # のような副作用のなさそうな式のソース文字列で、同じキーならば同じ値とみなす。
-  # 途中で同じキーへの代入があれば、そのキーのガードは解除する。
+  # that looks side-effect free; equal keys are assumed to denote the same value.
+  # An assignment to the same key in between cancels the guard for that key.
   class Guards
     Hit = Struct.new(:path, :line, :col, :mid, :mid_line, :mid_col, :key, :guarded_by)
 
-    # 真なら「key は nil でない」と言える述語
+    # Predicates whose truth implies "key is not nil"
     POSITIVE_PREDICATES = %i[present? is_a? kind_of? instance_of? respond_to? any? persisted?].freeze
-    # 真なら「key は nil かもしれない」(偽なら nil でない) と言える述語
+    # Predicates whose truth means "key may be nil" (falsity implies not nil)
     NEGATIVE_PREDICATES = %i[nil? blank?].freeze
     EXIT_CALLS = %i[raise fail].freeze
 
@@ -44,7 +44,7 @@ module Nilflow
 
     private
 
-    # guarded: { key => guarded_by } (この地点で nil でないと分かっているキー)
+    # guarded: { key => guarded_by } (keys known not to be nil at this point)
     def visit(node, guarded)
       return unless node
       case node
@@ -78,7 +78,7 @@ module Nilflow
         end
         node.compact_child_nodes.each { |c| visit(c, guarded) }
       when Prism::DefNode
-        # メソッド境界でガードは引き継がない
+        # Guards do not carry across method boundaries
         node.compact_child_nodes.each { |c| visit(c, {}) }
       else
         node.compact_child_nodes.each { |c| visit(c, guarded) }
@@ -88,12 +88,12 @@ module Nilflow
     def visit_statements(stmts, guarded)
       g = guarded.dup
       stmts.each do |st|
-        # 同じキーへの代入でガードを解除
+        # An assignment to the same key cancels its guard
         if (w = written_key(st))
           g.delete(w)
         end
         visit(st, g)
-        # 早期脱出 `return if x.nil?` / `raise unless x` の後は、脱出しなかった側の条件が成り立つ
+        # After an early exit such as `return if x.nil?` / `raise unless x`, the non-exiting condition holds
         if (exit_pred = early_exit(st))
           pred, kind = exit_pred
           pos, neg = split(pred)
@@ -110,7 +110,7 @@ module Nilflow
       g
     end
 
-    # 述語を「真なら非 nil と分かるキー」「偽なら非 nil と分かるキー」に分ける
+    # Split a predicate into keys known non-nil when it is true, and keys known non-nil when it is false
     def split(pred)
       case pred
       when nil then [[], []]
@@ -144,7 +144,7 @@ module Nilflow
           else [[], []]
           end
         elsif (k2 = key_of(pred))
-          [[k2], []] # 真偽値としての `if x` / `if foo`
+          [[k2], []] # truthiness check such as `if x` / `if foo`
         else
           [[], []]
         end
@@ -154,7 +154,7 @@ module Nilflow
       end
     end
 
-    # 受信者を同一視するためのキー。副作用がなさそうな式だけ対象にする
+    # Key used to identify receivers. Only expressions that look side-effect free get a key
     def key_of(node)
       case node
       when Prism::InstanceVariableReadNode, Prism::LocalVariableReadNode,
@@ -186,7 +186,7 @@ module Nilflow
       end
     end
 
-    # `return if cond` / `raise ... unless cond` のような、本体が脱出だけの条件文なら [pred, :if|:unless]
+    # If st is a conditional whose body only exits, such as `return if cond` / `raise ... unless cond`, return [pred, :if|:unless]
     def early_exit(st)
       case st
       when Prism::IfNode

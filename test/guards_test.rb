@@ -2,9 +2,9 @@ require "minitest/autorun"
 require "tempfile"
 require "nilflow/guards"
 
-# 構文的ガード解析: 「この呼び出しの受信者は、支配するガードで nil が除外されているか」
+# Syntactic guard analysis: "is nil excluded from this call's receiver by a dominating guard?"
 class GuardsTest < Minitest::Test
-  # [メソッド本体, 期待 { "メソッド名" => ガード済みか }]
+  # [method body, expected { "method name" => guarded? }]
   CASES = {
     "return if @x.nil?; @x.foo"                      => { "foo" => true },
     "return unless @x; @x.foo"                       => { "foo" => true },
@@ -14,16 +14,16 @@ class GuardsTest < Minitest::Test
     "@x && @x.foo"                                   => { "foo" => true },
     "@x.nil? || @x.foo"                              => { "foo" => true },
     "if @x.present? then @x.foo else @x.bar end"     => { "foo" => true, "bar" => false },
-    "return if @x.nil?; @x = nil; @x.foo"            => { "foo" => false }, # 再代入でガード解除
-    "account.present? && account.foo"                => { "foo" => true },  # attr_reader 相当
-    "m.r && m.r.foo"                                 => { "foo" => true },  # 連鎖
+    "return if @x.nil?; @x = nil; @x.foo"            => { "foo" => false }, # reassignment cancels the guard
+    "account.present? && account.foo"                => { "foo" => true },  # attr_reader-like call
+    "m.r && m.r.foo"                                 => { "foo" => true },  # chained call
     "@x.foo"                                         => { "foo" => false },
     "if !@x.nil? then @x.foo end"                    => { "foo" => true },
     "@x.foo if @x == nil"                            => { "foo" => false },
     "@x.foo if @x != nil"                            => { "foo" => true },
     "[1].each { |v| next if v.nil?; v.foo }"         => { "foo" => true },
-    "return if @x.nil?; [1].each { @x.foo }"         => { "foo" => true },  # ブロック内にも及ぶ
-    "if @x.nil?; return; end; @x.foo"                => { "foo" => true },  # 非修飾子形
+    "return if @x.nil?; [1].each { @x.foo }"         => { "foo" => true },  # extends into blocks
+    "if @x.nil?; return; end; @x.foo"                => { "foo" => true },  # non-modifier form
   }
 
   CASES.each_with_index do |(body, expected), i|

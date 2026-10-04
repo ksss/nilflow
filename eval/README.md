@@ -1,85 +1,85 @@
-# 評価実験: 型で解決した呼び出し関係と値の来歴は、AI エージェントの手戻りを減らすか
+# Evaluation: do type-resolved call relations and value provenance reduce an AI agent's rework?
 
-## 仮説
+## Hypothesis
 
-Rails アプリのバグ調査で、grep と Read しか持たないエージェントに比べ、
-「受信者の型で解決した呼び出し先」と「値の来歴」を受け取れるエージェントは、
-原因箇所に早くたどり着き、誤った編集が少なく、正しい修正をする割合が高い。
+When investigating bugs in a Rails application, an agent that receives call targets resolved by receiver type
+and the provenance of values will, compared with an agent that only has grep and Read,
+reach the faulty code sooner, make fewer wrong edits, and produce correct fixes more often.
 
-## 課題
+## Tasks
 
-mastodon の過去のバグ修正コミットから 5 件を選びました(`tasks/*.yaml`)。
+Five past bug-fix commits from mastodon (`tasks/*.yaml`).
 
-| 課題 | 修正コミット | 内容 |
+| task | fix commit | description |
 |---|---|---|
-| t1_idempotency_500 | 4e15f3db | 同じ Idempotency-Key で二度投稿すると 500 になる |
-| t2_create_author_change | 9d51f51c | 既知の投稿を別の作者が Create すると RecordInvalid になる |
-| t3_reach_filter_threshold | 5d7465a9 | 決して真にならない条件のせいで、飽和しきい値が誤る |
-| t4_reported_statuses_purge | cd4e10bb | アカウント削除時に、通報された投稿に deleted_at が付かない |
-| t5_quote_edit_text | 18865140 | 引用投稿の本文を編集できない |
+| t1_idempotency_500 | 4e15f3db | Posting twice with the same Idempotency-Key returns HTTP 500 |
+| t2_create_author_change | 9d51f51c | A `Create` for a known status by a different author raises RecordInvalid |
+| t3_reach_filter_threshold | 5d7465a9 | A condition that is never true makes the saturation threshold wrong |
+| t4_reported_statuses_purge | cd4e10bb | Reported statuses get no `deleted_at` when the account is deleted |
+| t5_quote_edit_text | 18865140 | The text of a quote post cannot be edited |
 
-選んだ条件は四つです。app/ か lib/ を変更していること、spec も変更していること、80 行未満の修正であること、2025 年 6 月以降であること。
-エージェントには修正コミットの親を渡し、症状の説明だけを与えます。ファイル名とメソッド名は伏せました。
-正解は、修正コミットが変更したメソッドです。修正の正しさは、修正コミットに含まれる spec で判定します。
-環境のせいで元から落ちる example を除くため、本物の修正を当てたときの失敗集合を基準にしています(`oracle.sh`)。
+Selection criteria: the commit changes `app/` or `lib/`, also changes `spec/`, adds fewer than 80 lines, and was made after June 2025.
+The agent works on the parent of the fix commit and only receives a description of the symptom, with file and method names withheld.
+The ground truth is the set of methods changed by the fix commit. Fix correctness is judged by the spec included in the fix commit.
+To ignore examples that fail for environmental reasons, the baseline is the set of failures observed when the real fix is applied (`oracle.sh`).
 
-## 条件
+## Conditions
 
-| 条件 | エージェントに渡すもの | 仕組み |
+| condition | what the agent gets | mechanism |
 |---|---|---|
-| A | grep / Read / Edit / Bash のみ | |
-| B | A に加え、nilflow CLI の使い方 | システムプロンプトに追記するだけ |
-| C | A に加え、触ったファイルの nilflow 要約を自動で添付 | PostToolUse フック(`hooks/inject.sh`) |
-| D | B に加え、nilflow を実行していないファイルへの編集を拒否 | PreToolUse フック(`hooks/require_nilflow.sh`) |
-| E | A に加え、人手で書いた「理想的な解析結果」を一度だけ添付 | PostToolUse フック(`hooks/inject_oracle.sh`、`oracle_notes/`) |
+| A | grep / Read / Edit / Bash only | |
+| B | A, plus documentation of the nilflow CLI | appended to the system prompt |
+| C | A, plus a nilflow summary automatically attached for each file the agent touches | PostToolUse hook (`hooks/inject.sh`) |
+| D | B, plus edits are refused for files on which nilflow has not been run | PreToolUse hook (`hooks/require_nilflow.sh`) |
+| E | A, plus hand-written "ideal" analysis results attached once | PostToolUse hook (`hooks/inject_oracle.sh`, `oracle_notes/`) |
 
-E の注には、型、来歴、評価順序といった事実だけを書き、修正方法は書いていません。
-E は、nilflow が理想的な情報を出せたとしたら効くのか、という情報価値の上限を測るための条件です。
+The notes for E only state facts such as types, provenance, and evaluation order; they never say how to fix the bug.
+Condition E measures the upper bound of information value: would it help if nilflow could produce ideal information?
 
-モデルは claude-sonnet-5-5、ツール呼び出しは 60 回までです。
-テストや rails コマンドの実行は禁止し、「最小限の修正」を指示しています。
+Model: claude-sonnet-5-5, with at most 60 tool calls.
+Running tests or rails commands is forbidden, and the prompt asks for a minimal fix.
 
-## 結果
+## Results
 
-`results/pilot-2026-10.txt` が全実行の一覧です。各課題・各条件は 1〜2 回しか実行していないので、傾向を見る程度のものです。
+`results/pilot-2026-10.txt` lists every run. Each task and condition was run only once or twice, so treat these numbers as trends only.
 
-| 条件 | 実行数 | 原因を特定 | spec 合格 | ツール呼び出し平均 | nilflow 呼び出し平均 |
+| condition | runs | root cause identified | spec passed | avg. tool calls | avg. nilflow calls |
 |---|---|---|---|---|---|
 | A | 10 | 9/10 | 8/10 | 4.5 | 0 |
 | B | 5 | 4/5 | 4/5 | 4.0 | 0 |
-| C | 5 | 5/5 | 4/5 | 4.2 | 0(注入は平均 2.2 回) |
+| C | 5 | 5/5 | 4/5 | 4.2 | 0 (2.2 injections on average) |
 | D | 5 | 5/5 | 3/5 | 6.2 | 1.4 |
-| E | 10 | 9/10 | 8/10 | 3.9 | 0(注入は平均 0.9 回) |
+| E | 10 | 9/10 | 8/10 | 3.9 | 0 (0.9 injections on average) |
 
-spec に落ちたのは、ほとんどが t1 です。t1 は全条件で落ちました。
+Almost all spec failures are on t1, which failed under every condition.
 
-## 分かったこと
+## Findings
 
-1. **場所の特定には差が出なかった。** どの条件でも、原因のファイルには 1〜2 手目でたどり着きました。症状の文章にクラス名や固有の文言が残っていて、grep で足りたからです。
-2. **説明だけでは使われない。** B では nilflow を一度も呼びませんでした。未知のツールを使わせるには、フックによる注入か強制が必要です。
-3. **今の nilflow の情報では、修正が変わらなかった。** C と D では情報は届いていました。しかし核心の式に対して nilflow は `untyped [unknown]` と答えていました。t3 の `bloom_filters.size` は ActiveRecord の属性経由で、t1 の `@status` はインスタンス変数です。
-4. **理想的な情報は、認識を変えた。** t1 には欠陥が二つあります。報告された症状は「重複を検出したときに戻り値が捨てられ、`@status` が nil のまま後処理に進む」ことです。もう一つは「重複チェックが `preprocess_attributes!` より先に走るので `@scheduled_at` がまだ設定されていない」ことで、回帰 spec はこちらの修正も求めます。E の 2 回はどちらも、二つ目の欠陥を正しく説明しました。そのうえで「報告された問題とは別なので、最小限の修正にとどめる」と判断して直しませんでした。A では、どの実行もこの欠陥に触れていません。
+1. **Localization showed no difference.** Under every condition, the agent reached the faulty file on the first or second step. Class names and distinctive wording remained in the symptom descriptions, so grep was enough.
+2. **Documentation alone does not get a tool used.** Under B, nilflow was never called. Getting an agent to use an unfamiliar tool requires a hook that injects its output or enforces its use.
+3. **With nilflow's current information, the fixes did not change.** Under C and D the information reached the agent, but for the key expressions nilflow answered `untyped [unknown]`. In t3, `bloom_filters.size` goes through an ActiveRecord attribute; in t1, `@status` is an instance variable.
+4. **Ideal information changed what the agent recognized.** t1 has two defects. The reported symptom is that when a duplicate is detected, the return value is discarded and post-processing runs with `@status` still nil. The second is that the duplicate check runs before `preprocess_attributes!`, so `@scheduled_at` is not set yet; the regression spec requires fixing this too. In both E runs, the agent correctly described the second defect, then decided not to fix it because it was "separate from the reported problem" and the fix should stay minimal. No run under A mentioned this defect.
 
-## この実験の設計上の問題
+## Problems with this design
 
-- 症状の文章と正解の spec で、求める範囲がずれていました。そのため「分かったのに直さなかった」と「分からなかった」が同じ数字になります。原因を正しく認識したかどうかを、修正とは別の指標で測る必要があります。
-- 症状の文章から場所が推測できるので、場所の特定では差が出ません。
-- 試行回数が少ないです。
+- The symptom descriptions and the ground-truth specs disagree on scope. As a result, "understood but did not fix" scores the same as "did not understand". Recognizing the root cause needs to be measured separately from the fix.
+- The symptom descriptions reveal the location, so localization cannot show a difference.
+- There are too few runs.
 
-## ハーネスで踏んだ罠
+## Pitfalls in the harness
 
-- rbenv の `exec` は、`RBENV_VERSION` と `versions/<v>/bin` を子プロセスに残します。作業木ごとの `.ruby-version` を効かせるため、PATH を掃除して shims を先頭に置いています。
-- ラッパーが `cd` すると、エージェントが渡した相対パスの基準がずれます。nilflow は `NILFLOW_ROOT` を基準に解決します。
-- フックが返す `additionalContext` は stream-json の出力に現れません。注入の回数はフック自身のログから数えています。
-- エージェントは Edit ツールより、Bash の `sed -i` や python で編集することが多いです。編集の数え漏れに注意が要ります。
-- `claude -p` は、ユーザーの `~/.claude/CLAUDE.md` や出力スタイルを引き継ぎます。`--setting-sources project` で切っています。
+- rbenv's `exec` leaves `RBENV_VERSION` and `versions/<v>/bin` in the environment of child processes. To make each worktree's `.ruby-version` take effect, the harness cleans `PATH` and puts the shims first.
+- When the wrapper changes directory, relative paths passed by the agent are resolved against the wrong base. nilflow resolves them against `NILFLOW_ROOT`.
+- The `additionalContext` returned by a hook does not appear in the stream-json output. Injections are counted from the hook's own log.
+- Agents often edit with `sed -i` or Python through Bash rather than the Edit tool. Edit counting must account for this.
+- `claude -p` inherits the user's `~/.claude/CLAUDE.md` and output style. The harness disables them with `--setting-sources project`.
 
-## 再現手順
+## Reproducing
 
-mastodon のチェックアウト、PostgreSQL、Redis、libvips、各 base コミットが要求する Ruby が必要です。
+You need a mastodon checkout, PostgreSQL, Redis, libvips, and the Ruby version each base commit requires.
 
 ```sh
-# mastodon 側で rbs collection を用意しておく (rbs_collection.yaml / .lock.yaml / .gem_rbs_collection)
+# Prepare rbs collection in mastodon first (rbs_collection.yaml / .lock.yaml / .gem_rbs_collection)
 MASTODON_DIR=/path/to/mastodon PG_BIN=/path/to/postgresql/bin eval/prepare.sh
 eval/oracle.sh t1_idempotency_500 t2_create_author_change t3_reach_filter_threshold t4_reported_statuses_purge t5_quote_edit_text
 PG_BIN=/path/to/postgresql/bin ruby eval/run.rb t1_idempotency_500 A 1
@@ -87,5 +87,5 @@ ruby eval/report.rb
 python3 eval/show_run.py eval/runs/t1_idempotency_500_E_1.jsonl
 ```
 
-`prepare.sh` は課題ごとに `eval/wt/<task>` へ git worktree を作り、`eval/db/<task>.db` を構築し、テスト用 DB を用意します。
-`run.rb` は `claude` CLI をヘッドレスで実行します。API の利用料がかかります。
+`prepare.sh` creates a git worktree for each task under `eval/wt/<task>`, builds `eval/db/<task>.db`, and sets up a test database.
+`run.rb` runs the `claude` CLI headless, which incurs API costs.

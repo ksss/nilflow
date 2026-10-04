@@ -1,6 +1,6 @@
 #!/bin/bash
-# 条件 D: PreToolUse (Edit / Write)。編集対象ファイルについて nilflow をまだ実行していなければ拒否する。
-# NILFLOW_LOG には wrapper が実行した nilflow コマンドが 1 行ずつ追記されている。
+# Condition D: PreToolUse (Edit / Write). Refuse the edit if nilflow has not been run on the target file yet.
+# NILFLOW_LOG has one line appended per nilflow command run through the wrapper.
 input=$(cat)
 python3 - "$input" <<'PY'
 import json, os, sys

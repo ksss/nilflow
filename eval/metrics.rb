@@ -1,5 +1,5 @@
-# 生データ (jsonl transcript, hook.log, spec.log, nilflow.log) から指標を計算する。
-# run.rb と report.rb の両方から使い、指標の定義を一箇所にまとめる。
+# Compute metrics from raw data (jsonl transcript, hook.log, spec.log, nilflow.log).
+# Used by both run.rb and report.rb so that metric definitions live in one place.
 require "json"
 require "yaml"
 require "set"
@@ -36,13 +36,13 @@ module Metrics
     hook_log = "#{stem}.hook.log"
     injected = File.exist?(hook_log) ? File.readlines(hook_log).count { _1.start_with?("OUT") && _1[/notes_chars=(\d+)/, 1].to_i > 0 } : 0
 
-    # spec の合否は「本物の修正を当てた時の失敗集合」(eval/runs/<task>.oracle.log) を基準にする。
-    # 環境要因で元から落ちる example は数えない。
+    # A spec passes if its failures are a subset of those seen with the real fix applied (eval/runs/<task>.oracle.log).
+    # Examples that fail for environmental reasons are thus not counted.
     spec_pass = nil
     if File.exist?("#{stem}.spec.log")
       so = File.read("#{stem}.spec.log", encoding: "UTF-8").scrub
       if so.include?("bundler: failed") || so.include?("rbenv: version") || !so.match?(/\d+ examples?,/)
-        spec_pass = nil # 環境エラーは判定不能
+        spec_pass = nil # environment error: cannot judge
       else
         failing = ->(log) { log.scan(/^rspec (\S+:\d+)/).flatten.to_set }
         oracle = File.join(File.dirname(stem), "#{task['id']}.oracle.log")

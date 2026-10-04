@@ -1,15 +1,15 @@
 #!/usr/bin/env ruby
-# 1 課題 × 1 条件 × 1 反復を実行し、transcript と指標を保存する。
+# Run one task x one condition x one repetition, and save the transcript and metrics.
 #
 #   ruby eval/run.rb TASK_ID COND [REP]
 #
-#   COND: A grep のみ / B nilflow CLI の説明のみ / C PostToolUse で要約を自動注入 /
-#         D PreToolUse で nilflow 未実行の編集を拒否 / E 人手で書いた「理想の注」を注入
+#   COND: A grep only / B nilflow CLI docs only / C summaries injected by a PostToolUse hook /
+#         D edits refused until nilflow is run (PreToolUse hook) / E hand-written "ideal" notes injected
 #
-# 環境変数: NILFLOW_MODEL (既定 claude-sonnet-5-5), PG_BIN (psql 等のある bin ディレクトリ),
-#           NILFLOW_RUN_SPEC=0 で spec 実行を省略
+# Environment: NILFLOW_MODEL (default claude-sonnet-5-5), PG_BIN (bin directory containing psql etc.),
+#              NILFLOW_RUN_SPEC=0 to skip running the spec
 #
-# 出力: eval/runs/<task>_<cond>_<rep>.jsonl (stream-json transcript)
+# Output: eval/runs/<task>_<cond>_<rep>.jsonl (stream-json transcript)
 #       eval/runs/<task>_<cond>_<rep>.metrics.json
 require "yaml"
 require "json"
@@ -33,11 +33,11 @@ abort "db missing: #{db}" if cond != "A" && !File.exist?(db)
 FileUtils.mkdir_p(File.join(EVAL, "runs"))
 stem = File.join(EVAL, "runs", "#{task_id}_#{cond}_#{rep}")
 
-# --- 作業木を初期化 (前回の編集を捨てる) --------------------------------------
+# --- Reset the worktree (discard previous edits) -----------------------------------
 system("git", "-C", wt, "checkout", "--", ".", out: File::NULL, err: File::NULL)
 system("git", "-C", wt, "clean", "-fdq", "-e", ".gem_rbs_collection", "-e", "rbs_collection*.yaml", "-e", ".env.test", out: File::NULL, err: File::NULL)
 
-# --- プロンプト (全条件で同一) ---------------------------------------------------
+# --- Prompt (identical for all conditions) ----------------------------------------
 prompt = <<~PROMPT
   You are working in a checkout of a Rails application (Mastodon). A bug has been reported:
 
@@ -54,7 +54,7 @@ prompt = <<~PROMPT
   FIX: <one sentence>
 PROMPT
 
-# --- nilflow ラッパー (条件 B/D で PATH に置く。呼ばれたコマンドをログに残す) --------
+# --- nilflow wrapper (put on PATH for conditions B/D; logs every command) ----------
 bin_dir = File.join(EVAL, "bin_#{task_id}")
 FileUtils.mkdir_p(bin_dir)
 nilflow_log = File.join(EVAL, "runs", "#{task_id}_#{cond}_#{rep}.nilflow.log")
@@ -62,7 +62,7 @@ File.delete(nilflow_log) if File.exist?(nilflow_log)
 File.write(File.join(bin_dir, "nilflow"), <<~SH)
   #!/bin/bash
   echo "$@" >> #{nilflow_log.shellescape}
-  # nilflow は自身のディレクトリの bundle で動かす (作業木の .ruby-version / Gemfile に引きずられないように)
+  # Run nilflow with its own bundle (not affected by the worktree's .ruby-version / Gemfile)
   cd #{NF.shellescape} && unset RBENV_VERSION BUNDLE_GEMFILE && NILFLOW_ROOT=#{wt.shellescape} exec bundle exec ruby exe/nilflow "$@" #{db.shellescape}
 SH
 FileUtils.chmod(0o755, File.join(bin_dir, "nilflow"))
@@ -83,14 +83,14 @@ nilflow_doc = <<~DOC
   The SQLite file is #{db} (tables: vertices, type_flow, call_sites, calls, methods, guards) if you prefer raw SQL via sqlite3.
 DOC
 
-# --- claude をヘッドレスで実行 ------------------------------------------------------
+# --- Run claude headless ----------------------------------------------------------
 cmd = [
   "claude", "-p",
   "--output-format", "stream-json", "--verbose",
   "--tools", "Read,Grep,Glob,Bash,Edit,Write",
   "--permission-mode", "bypassPermissions",
   "--no-session-persistence",
-  "--setting-sources", "project",   # ~/.claude/CLAUDE.md や出力スタイルを継承しない
+  "--setting-sources", "project",   # do not inherit ~/.claude/CLAUDE.md or the output style
   "--max-budget-usd", "5",
   "--model", ENV.fetch("NILFLOW_MODEL", "claude-sonnet-5-5"),
 ]
@@ -114,8 +114,8 @@ when "C" then cmd += ["--append-system-prompt", inject_doc, "--settings", JSON.g
 when "D" then cmd += ["--append-system-prompt", force_doc, "--settings", JSON.generate(hooks["D"])]
 when "E" then cmd += ["--append-system-prompt", inject_doc.sub("[nilflow]", "[nilflow:oracle]"), "--settings", JSON.generate(hooks["E"])]
 end
-# rbenv の `exec` は RBENV_VERSION と versions/<v>/bin を子に残す。作業木ごとの .ruby-version を効かせるため、
-# PATH から versions/*/bin を除いて shims を先頭に戻し、RBENV_VERSION は外す。
+# rbenv's `exec` leaves RBENV_VERSION and versions/<v>/bin to children. To let each worktree's .ruby-version apply,
+# drop versions/*/bin from PATH, put the shims first, and unset RBENV_VERSION.
 rbenv_shims = File.expand_path("~/.rbenv/shims")
 clean_path = [ENV["PG_BIN"], (rbenv_shims if Dir.exist?(rbenv_shims)),
               *ENV["PATH"].split(":").reject { _1.include?("/.rbenv/versions/") }].compact.uniq.join(":")
@@ -131,9 +131,9 @@ wall = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
 File.write("#{stem}.jsonl", out)
 File.write("#{stem}.stderr", err)
 
-# --- 修正後の検証と指標 -----------------------------------------------------------
+# --- Verification and metrics ----------------------------------------------------
 require_relative "metrics"
-# 修正後の検証: 修正コミットの spec を作業木に入れて実行する (環境がある場合)
+# Verification: put the fix commit's spec into the worktree and run it (if the environment allows)
 if task["spec"] && ENV["NILFLOW_RUN_SPEC"] != "0"
   spec_src, = Open3.capture2("git", "-C", wt, "show", "#{task['fix_commit']}:#{task['spec']}")
   unless spec_src.empty?

@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# eval/runs/*.jsonl から指標を再計算して集計する (metrics.json は wall_s/cond/rep の参照に使う)
+# Recompute metrics from eval/runs/*.jsonl and aggregate them (metrics.json is only used for wall_s/cond/rep)
 require "json"
 require "yaml"
 require_relative "metrics"

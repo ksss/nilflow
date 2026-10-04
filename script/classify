@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
-# nil-receivers (ガード済みを除く) の残件を機械的に分類する
+# Classify the remaining unguarded nil-receivers mechanically
 #   bundle exec script/classify graph.db
-#  - only_nil   : 受信者の既知の型が nil だけ (他の経路は untyped → 根拠が弱い)
-#  - ivar_param : ivar 受信者で、同じメソッド内にその ivar への代入がない (呼び出し元が設定する「暗黙の引数」)
-#  - ivar_local : ivar 受信者で、同じメソッド内に代入がある
-#  - index_chain: 受信者が `x[...]` など引数ありの呼び出し (JSON の Hash#[] 連鎖など)
-#  - polymorphic: 型表示に Symbol と nil が混ざる (`:base?` のような多態の合流)
+#  - only_nil   : the only known receiver type is nil (other paths are untyped, so the evidence is weak)
+#  - ivar_param : ivar receiver with no assignment to that ivar in the same method (an "implicit argument" set by a caller)
+#  - ivar_local : ivar receiver assigned in the same method
+#  - index_chain: receiver is a call with arguments such as `x[...]` (e.g. Hash#[] chains over JSON)
+#  - polymorphic: the displayed type mixes Symbol and nil (polymorphic merge such as `:base?`)
 #  - other
 require_relative "../lib/nilflow"
 require "prism"

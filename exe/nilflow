@@ -4,25 +4,25 @@ require_relative "../lib/nilflow"
 usage = <<~USAGE
   usage:
     nilflow build DIR... [-o graph.db] [--collection rbs_collection.yaml]
-                                         DIR 以下の .rb/.rbs を解析して SQLite に書く
-    nilflow stats [graph.db]             カバレッジ指標 (呼び出し単位) を表示する
-    nilflow why FILE:LINE:COL [graph.db] その位置に nil が来る経路を表示する
+                                         analyze .rb/.rbs under DIR and write SQLite
+    nilflow stats [graph.db]             show coverage (per call)
+    nilflow why FILE:LINE:COL [graph.db] show the paths by which nil reaches the position
     nilflow nil-receivers [--all] [graph.db]
-                                         受信者が nil になり得る呼び出しを列挙する (--all でガード済みも含む)
-    nilflow calls FILE:LINE [graph.db]   その行の呼び出しが解決した先を表示する
-  エージェント向け (出力は file:line と型だけの簡潔な形):
-    nilflow callers Klass#mid [graph.db] 型解決済みの呼び出し元。未解決の同名呼び出し数も添える
-    nilflow callees FILE:LINE [graph.db] その行の各呼び出しの受信者型・解決先・確度
-    nilflow type-at FILE:LINE:COL [graph.db] その位置の式の型と確度
-    nilflow why FILE:LINE:COL [--type T] [graph.db] 値の来歴 (既定は nil)
-    nilflow summary FILE[:FROM:TO] [graph.db]  ファイル (行範囲) の呼び出しを 1 行ずつ要約 (フック注入用)
+                                         list calls whose receiver may be nil (--all includes guarded ones)
+    nilflow calls FILE:LINE [graph.db]   show the resolved targets of calls on the line
+  for agents (concise output: file:line and types):
+    nilflow callers Klass#mid [graph.db] type-resolved call sites, plus the number of unresolved same-named calls
+    nilflow callees FILE:LINE [graph.db] receiver type, resolved targets and confidence of each call on the line
+    nilflow type-at FILE:LINE:COL [graph.db] type and confidence of the expression at the position
+    nilflow why FILE:LINE:COL [--type T] [graph.db] provenance of a value (nil by default)
+    nilflow summary FILE[:FROM:TO] [graph.db]  one line per call in the file or range (for hook injection)
 USAGE
 
 cmd, *args = ARGV
 db = "graph.db"
-# 相対パスは NILFLOW_ROOT (解析対象のリポジトリ) 基準で解決する。ラッパー経由で cwd が変わっても正しく引けるように。
+# Resolve relative paths against NILFLOW_ROOT (the analyzed repository), so they work even when a wrapper changes cwd.
 def expand(file) = File.expand_path(file, ENV["NILFLOW_ROOT"] || Dir.pwd)
-# 出力ではリポジトリ基準の相対パスに戻す (エージェントが読みやすいように)
+# Print paths relative to the repository (easier for agents to read)
 def short(path) = path.to_s.gsub("#{ENV['NILFLOW_ROOT']}/", "").gsub(%r{\S*/gems/rbs-[^/]*/}, "rbs:")
 at_exit { $stdout.flush }
 case cmd

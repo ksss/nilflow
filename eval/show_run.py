@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# transcript (claude -p --output-format stream-json) からツール呼び出しと最終回答を抜き出して表示する
+# Extract tool calls and the final answer from a transcript (claude -p --output-format stream-json)
 #   python3 eval/show_run.py eval/runs/<task>_<cond>_<rep>.jsonl
 import json
 import os
