@@ -1,0 +1,17 @@
+id: t2_create_author_change
+fix_commit: 9d51f51c
+base_commit: 3d51d8bc
+kind: activitypub / data-flow / nil
+symptom: |
+  When an inbound ActivityPub `Create` activity refers to a status that is already known locally,
+  but the activity's actor differs from the known status's author, processing raises
+  `ActiveRecord::RecordInvalid` while trying to create the post again. Authorship change is not
+  supported and should simply be rejected (return nil), not attempted.
+
+  Side effect: because of the unexpected exception, `ProcessLinksService` aborts processing of any
+  local post that links to such a status.
+
+  Find why the known status is not recognised in this situation and fix it so the activity is rejected.
+ground_truth:
+  - { file: app/lib/activitypub/activity/create.rb, methods: [perform, find_existing_status] }
+spec: spec/lib/activitypub/activity/create_spec.rb

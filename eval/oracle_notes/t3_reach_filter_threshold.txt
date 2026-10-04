@@ -1,0 +1,5 @@
+[nilflow:oracle] app/models/account_reach_filter.rb — facts an ideal analysis would report:
+- bloom_filters (alias of serialized attribute bloom_filter, L72-73): Array[BloomFit]. bloom_filters.size -> Integer (never nil). bloom_filter.size (L118) -> same Integer.
+- next_filter_class (L104, L118): Integer in [1, BLOOM_FILTER_TARGET_CAPACITIES.size]; it is never nil, so `next_filter_class.nil?` at L105 and L119 is always false and the ternary always selects TARGET_FALSE_POSITIVE_RATE (0.0001). TARGET_SATURATION_FALSE_POSITIVE_RATE (0.75) is never used.
+- BLOOM_FILTER_TARGET_CAPACITIES (L44) has 6 elements; L115 compares next_filter_class < 6. After the last filter class is appended (L116), next_filter_class == 6 at L118.
+- threshold (L105, L119): Float; compared with bloom_filters.last.set_bits (Integer) at L111.

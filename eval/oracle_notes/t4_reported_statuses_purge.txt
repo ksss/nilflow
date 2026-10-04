@@ -1,0 +1,5 @@
+[nilflow:oracle] app/services/delete_account_service.rb — facts an ideal analysis would report:
+- reported_status_ids (L311): Array[Integer], memoized; ids of statuses referenced by @account.targeted_reports.unresolved.
+- purge_statuses! (L165), called only from purge_content! (L152): the relation `@account.statuses.reorder(nil).where.not(id: reported_status_ids)` excludes every reported status; those statuses are never passed to BatchedRemoveStatusService and no other statement in this service touches them. In particular nothing in this service sets `deleted_at` on them.
+- Status#deleted_at: `Time | nil`; a nil deleted_at is what the scheduled cleanup uses to decide a status is live.
+- purge_mentions! (L171) applies the same where.not(reported_status_ids) exclusion for mentions.

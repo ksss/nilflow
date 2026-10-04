@@ -1,0 +1,25 @@
+id: t1_idempotency_500
+fix_commit: 4e15f3db
+base_commit: e90160eb
+kind: service / nil / control-flow
+symptom: |
+  Submitting the same status twice with an identical `Idempotency-Key` returns HTTP 500 instead of
+  the existing status. Reproducible in rails console (direct visibility):
+
+      account = Account.find_by(username: 'someone', domain: nil)
+      key = SecureRandom.hex(8)
+      PostStatusService.new.call(account, text: 'test', visibility: 'direct', idempotency: key)  # ok
+      PostStatusService.new.call(account, text: 'test', visibility: 'direct', idempotency: key)  # raises
+
+  Expected: the second call is recognised as a duplicate and returns the status created by the first call.
+  Actual: the duplicate is detected, but the request fails with:
+
+      NoMethodError (undefined method 'account' for nil)
+        ProcessHashtagsService#call
+        PostStatusService#postprocess_status!
+        PostStatusService#call
+
+  Find the root cause and fix it.
+ground_truth:
+  - { file: app/services/post_status_service.rb, methods: [call, with_idempotency] }
+spec: spec/services/post_status_service_spec.rb

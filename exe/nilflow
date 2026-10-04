@@ -1,0 +1,123 @@
+#!/usr/bin/env ruby
+require_relative "../lib/nilflow"
+
+usage = <<~USAGE
+  usage:
+    nilflow build DIR... [-o graph.db] [--collection rbs_collection.yaml]
+                                         DIR 以下の .rb/.rbs を解析して SQLite に書く
+    nilflow stats [graph.db]             カバレッジ指標 (呼び出し単位) を表示する
+    nilflow why FILE:LINE:COL [graph.db] その位置に nil が来る経路を表示する
+    nilflow nil-receivers [--all] [graph.db]
+                                         受信者が nil になり得る呼び出しを列挙する (--all でガード済みも含む)
+    nilflow calls FILE:LINE [graph.db]   その行の呼び出しが解決した先を表示する
+  エージェント向け (出力は file:line と型だけの簡潔な形):
+    nilflow callers Klass#mid [graph.db] 型解決済みの呼び出し元。未解決の同名呼び出し数も添える
+    nilflow callees FILE:LINE [graph.db] その行の各呼び出しの受信者型・解決先・確度
+    nilflow type-at FILE:LINE:COL [graph.db] その位置の式の型と確度
+    nilflow why FILE:LINE:COL [--type T] [graph.db] 値の来歴 (既定は nil)
+    nilflow summary FILE[:FROM:TO] [graph.db]  ファイル (行範囲) の呼び出しを 1 行ずつ要約 (フック注入用)
+USAGE
+
+cmd, *args = ARGV
+db = "graph.db"
+# 相対パスは NILFLOW_ROOT (解析対象のリポジトリ) 基準で解決する。ラッパー経由で cwd が変わっても正しく引けるように。
+def expand(file) = File.expand_path(file, ENV["NILFLOW_ROOT"] || Dir.pwd)
+# 出力ではリポジトリ基準の相対パスに戻す (エージェントが読みやすいように)
+def short(path) = path.to_s.gsub("#{ENV['NILFLOW_ROOT']}/", "").gsub(%r{\S*/gems/rbs-[^/]*/}, "rbs:")
+at_exit { $stdout.flush }
+case cmd
+when "build"
+  dirs = []
+  collection = nil
+  until args.empty?
+    case (a = args.shift)
+    when "-o" then db = args.shift
+    when "--collection" then collection = File.expand_path(args.shift)
+    else dirs << File.expand_path(a)
+    end
+  end
+  abort usage if dirs.empty?
+  t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  service = Nilflow.analyze(dirs, collection: collection)
+  t1 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  Nilflow::Exporter.new(service, db).run
+  t2 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  $stderr.puts "analyze %.1fs, export %.1fs" % [t1 - t0, t2 - t1]
+  s = SQLite3::Database.new(db)
+  puts "wrote #{db}: " + %w[vertices type_flow call_sites calls].map { |t| "#{t}=#{s.get_first_value("SELECT count(*) FROM #{t}")}" }.join(", ")
+when "why"
+  pos = args.shift or abort usage
+  type = (i = args.index("--type")) ? args.slice!(i, 2).last : nil
+  db = args.shift || db
+  file, line, col = pos.split(":")
+  q = Nilflow::Query.new(db)
+  if type
+    v = q.type_at(expand(file), line.to_i, col.to_i)
+    abort "no vertex at #{pos}" unless v
+    preds = Hash.new { |h, k| h[k] = [] }
+    q.origin_edges(v["id"], type).each { |e| preds[e["dst"]] << e["src"] }
+    puts "#{type} reaches [#{v['id']}] #{v['origin']} @ #{File.basename(v['path'])}:#{v['line']}:#{v['col']} : #{v['types']}"
+    q.send(:print_tree, v["id"], preds, Set.new, 1, $stdout)
+  else
+    q.explain(expand(file), line.to_i, col.to_i)
+  end
+when "callers"
+  target = args.shift or abort usage
+  db = args.shift || db
+  q = Nilflow::Query.new(db)
+  rows, unresolved = q.callers(target)
+  rows.each do |r|
+    m = q.method_at(r["path"], r["line"])
+    puts "#{short(r['path'])}:#{r['line']}  in #{m || '(toplevel)'}  recv=#{r['types']}  [#{q.confidence_of(r['types'])}]"
+  end
+  d = rows.first
+  puts "defined at #{short(d['def_path'])}:#{d['def_line']}" if d && d["def_path"]
+  puts "(#{rows.size} resolved callers; #{unresolved} calls named .#{target.split(/[#.]/).last} could not be resolved and are not listed)"
+when "callees"
+  pos = args.shift or abort usage
+  db = args.shift || db
+  file, line = pos.split(":")
+  q = Nilflow::Query.new(db)
+  rows = q.callees(expand(file), line.to_i)
+  puts "no calls on that line" if rows.empty?
+  rows.each do |r|
+    puts "col #{r['col']} .#{r['mid']}  recv=#{r['types'] || 'untyped'}  [#{q.confidence_of(r['types'])}]"
+    (r["targets"] || "  unresolved").split("\n").each { |t| puts "    -> #{short(t)}" }
+  end
+when "summary"
+  pos = args.shift or abort usage
+  db = args.shift || db
+  file, from, to = pos.split(":")
+  q = Nilflow::Query.new(db)
+  q.root = ENV["NILFLOW_ROOT"]
+  puts q.summary(expand(file), from&.to_i, to&.to_i)
+when "type-at"
+  pos = args.shift or abort usage
+  db = args.shift || db
+  file, line, col = pos.split(":")
+  q = Nilflow::Query.new(db)
+  v = q.type_at(expand(file), line.to_i, col.to_i)
+  if v
+    puts "#{v['origin']} @ #{file}:#{v['line']}:#{v['col']}-#{v['end_line']}:#{v['end_col']}  : #{v['types']}  [#{q.confidence_of(v['types'])}]"
+  else
+    puts "no typed expression at #{pos}"
+  end
+when "stats"
+  db = args.shift || db
+  Nilflow::Query.new(db).stats.each { |k, v| puts "%-18s %d" % [k, v] }
+when "nil-receivers"
+  all = args.delete("--all")
+  db = args.shift || db
+  Nilflow::Query.new(db).nil_receivers(include_guarded: !!all).each do |r|
+    puts "#{short(r['path'])}:#{r['line']}:#{r['col']}  .#{r['mid']}  recv=[#{r['recv']}] #{r['types']}"
+  end
+when "calls"
+  pos = args.shift or abort usage
+  db = args.shift || db
+  file, line = pos.split(":")
+  Nilflow::Query.new(db).calls_at(expand(file), line.to_i).each do |r|
+    puts "col #{r['col']} .#{r['mid']} -> #{r['target']} (#{r['target_kind']}) #{short(r['tpath'])}:#{r['tline']}"
+  end
+else
+  abort usage
+end

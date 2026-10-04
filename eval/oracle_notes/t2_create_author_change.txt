@@ -1,0 +1,4 @@
+[nilflow:oracle] app/lib/activitypub/activity/create.rb — facts an ideal analysis would report:
+- find_existing_status (L92): status_from_uri(object_uri) resolves to ActivityPub::Activity#status_from_uri -> TagManager#uri_to_resource(uri, Status): `Status | nil`. L95 `status if status&.account_id == @account.id` evaluates to nil whenever the known status exists but its account_id differs from @account.id.
+- Callers of find_existing_status: only L34. At L37 `@status.nil?` is therefore true both when no status is known AND when a known status has a different author; both paths call process_status (L38), which creates a new Status with the same uri (Status validates uri uniqueness -> ActiveRecord::RecordInvalid).
+- reject_payload! (used at L28) returns nil; perform's value at L44 is @status.

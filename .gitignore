@@ -1,0 +1,10 @@
+/.bundle/
+/vendor/
+*.db
+*.db-journal
+# 評価ハーネスの生成物 (作業木、解析 DB、transcript、ラッパー)
+/eval/wt/
+/eval/db/
+/eval/runs/
+/eval/bin_*/
+/eval/oracle_notes/*.sent

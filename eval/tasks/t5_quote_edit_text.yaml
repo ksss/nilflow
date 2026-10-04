@@ -1,0 +1,14 @@
+id: t5_quote_edit_text
+fix_commit: 18865140
+base_commit: 6f6ab53e
+kind: service / condition / regression
+symptom: |
+  Editing a quote post no longer changes its text: when a user edits a status that quotes another
+  status and submits new text, the text stays as it was. Editing non-quote posts works.
+  This is a recent regression from a change that made an empty text fall back to the spoiler text
+  for quote-less posts.
+
+  Find the condition that wrongly skips the text update for quote posts and fix it.
+ground_truth:
+  - { file: app/services/update_status_service.rb, methods: [update_immediate_attributes!] }
+spec: spec/services/update_status_service_spec.rb

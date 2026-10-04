@@ -1,0 +1,4 @@
+[nilflow:oracle] app/services/update_status_service.rb — facts an ideal analysis would report:
+- update_immediate_attributes! (L113), called from L30. L114 is a single modifier-if statement: the assignment `@status.text = ...` executes only when `@options.key?(:text) && @status.quote.blank?` is true. @status.quote: `Quote | nil`; for a status that quotes another status, quote.blank? is false, so L114 assigns nothing and @status.text keeps its previous value.
+- Right-hand side of L114: `@options[:text].presence` (String | nil) || `@options.delete(:spoiler_text)` (String | nil, and it REMOVES :spoiler_text from @options) || ''. The spoiler_text fallback is only reached when @options[:text] is blank.
+- L115 reads @options[:spoiler_text] after L114; if L114 deleted it, L115 sees nil.

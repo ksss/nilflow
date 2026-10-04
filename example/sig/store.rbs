@@ -1,0 +1,5 @@
+# 外部ライブラリ想定: Ruby の実装はなく RBS だけがある
+class Store
+  def initialize: () -> void
+  def fetch: (String key) -> String?
+end

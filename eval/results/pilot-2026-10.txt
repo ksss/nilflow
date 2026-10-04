@@ -1,0 +1,42 @@
+task                       cond rep localized edited_gt first_gt_touch_at tool_calls edits wrong_edits nilflow_calls injected_notes spec_pass cost_usd wall_s
+t1_idempotency_500         A    1   yes yes 1 5 1 0 0 0 no 0.06 22
+t1_idempotency_500         A    2   yes yes 1 7 4 0 0 0 no 0.1 26
+t1_idempotency_500         B    1   yes yes 1 5 3 0 0 0 no 0.07 41
+t1_idempotency_500         C    1   yes yes 1 4 1 0 0 3 no 0.07 20
+t1_idempotency_500         D    1   yes yes 1 7 2 0 2 0 no 0.07 39
+t1_idempotency_500         E    1   yes yes 1 4 1 0 0 1 no 0.06 18
+t1_idempotency_500         E    2   yes yes 1 6 2 0 0 1 no 0.06 25
+t2_create_author_change    A    1   yes yes 1 6 2 0 0 0 yes 0.06 22
+t2_create_author_change    A    2   yes yes 1 3 1 0 0 0 yes 0.07 19
+t2_create_author_change    B    1   yes yes 1 5 2 0 0 0 yes 0.06 19
+t2_create_author_change    C    1   yes yes 1 6 2 0 0 1 yes 0.07 26
+t2_create_author_change    D    1   yes yes 1 7 2 0 1 0 yes 0.07 26
+t2_create_author_change    E    1   yes yes 1 4 2 0 0 1 yes 0.04 15
+t2_create_author_change    E    2   yes yes 1 4 2 0 0 1 yes 0.05 17
+t3_reach_filter_threshold  A    1   yes yes 2 7 4 0 0 0 yes 0.07 22
+t3_reach_filter_threshold  A    2   yes yes 2 6 4 0 0 0 yes 0.06 20
+t3_reach_filter_threshold  B    1   yes yes 2 5 2 0 0 0 yes 0.05 19
+t3_reach_filter_threshold  C    1   yes yes 2 5 3 0 0 4 yes 0.07 20
+t3_reach_filter_threshold  D    1   yes yes 2 8 3 0 2 0 yes 0.08 34
+t3_reach_filter_threshold  E    1   yes yes 2 4 2 0 0 1 yes 0.05 15
+t3_reach_filter_threshold  E    2   yes yes 2 5 2 0 0 1 yes 0.05 17
+t4_reported_statuses_purge A    1   yes yes 1 3 1 0 0 0 yes 0.03 14
+t4_reported_statuses_purge A    2   yes yes 1 3 1 0 0 0 yes 0.03 12
+t4_reported_statuses_purge B    1   yes yes 1 3 1 0 0 0 yes 0.03 13
+t4_reported_statuses_purge C    1   yes yes 1 3 1 0 0 2 yes 0.04 12
+t4_reported_statuses_purge D    1   yes yes 3 5 1 0 1 0 yes 0.04 20
+t4_reported_statuses_purge E    1   yes yes 3 4 1 0 0 1 yes 0.04 14
+t4_reported_statuses_purge E    2   yes yes 1 3 1 0 0 1 yes 0.04 14
+t5_quote_edit_text         A    1   yes yes 1 3 1 0 0 0 yes 0.04 15
+t5_quote_edit_text         A    2   no yes 1 2 1 0 0 0 yes 0.03 12
+t5_quote_edit_text         B    1   no yes 1 2 1 0 0 0 yes 0.04 11
+t5_quote_edit_text         C    1   yes yes 1 3 1 0 0 1 yes 0.04 15
+t5_quote_edit_text         D    1   yes yes 1 4 1 0 1 0 no 0.04 17
+t5_quote_edit_text         E    1   no yes 1 2 1 0 0 0 yes 0.03 14
+t5_quote_edit_text         E    2   yes yes 1 3 1 0 0 1 yes 0.04 15
+
+cond A: n=10 localized=9/10 spec_pass=8/10 first_gt_touch=1.2 tool_calls=4.5 edits=2.0 wrong_edits=0.0 nilflow_calls=0.0 injected=0.0 cost=0.1
+cond B: n=5 localized=4/5 spec_pass=4/5 first_gt_touch=1.2 tool_calls=4.0 edits=1.8 wrong_edits=0.0 nilflow_calls=0.0 injected=0.0 cost=0.1
+cond C: n=5 localized=5/5 spec_pass=4/5 first_gt_touch=1.2 tool_calls=4.2 edits=1.6 wrong_edits=0.0 nilflow_calls=0.0 injected=2.2 cost=0.1
+cond D: n=5 localized=5/5 spec_pass=3/5 first_gt_touch=1.6 tool_calls=6.2 edits=1.8 wrong_edits=0.0 nilflow_calls=1.4 injected=0.0 cost=0.1
+cond E: n=10 localized=9/10 spec_pass=8/10 first_gt_touch=1.4 tool_calls=3.9 edits=1.5 wrong_edits=0.0 nilflow_calls=0.0 injected=0.9 cost=0.0

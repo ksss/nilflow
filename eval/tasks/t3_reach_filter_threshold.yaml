@@ -1,0 +1,14 @@
+id: t3_reach_filter_threshold
+fix_commit: 5d7465a9
+base_commit: a4abbce9
+kind: model / value-flow / dead-condition
+symptom: |
+  Account reach filters are being dropped (marked saturated) far too early, at around 750 hosts,
+  although the largest bloom filter class should accept many more. The saturation threshold computed
+  for the largest filter seems to use the regular false-positive rate instead of the saturation rate.
+  A condition in the threshold computation is apparently never true.
+
+  Find the faulty computation and fix it.
+ground_truth:
+  - { file: app/models/account_reach_filter.rb, methods: [add] }
+spec: spec/models/account_reach_filter_spec.rb

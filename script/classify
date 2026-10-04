@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+# nil-receivers (ガード済みを除く) の残件を機械的に分類する
+#   bundle exec script/classify graph.db
+#  - only_nil   : 受信者の既知の型が nil だけ (他の経路は untyped → 根拠が弱い)
+#  - ivar_param : ivar 受信者で、同じメソッド内にその ivar への代入がない (呼び出し元が設定する「暗黙の引数」)
+#  - ivar_local : ivar 受信者で、同じメソッド内に代入がある
+#  - index_chain: 受信者が `x[...]` など引数ありの呼び出し (JSON の Hash#[] 連鎖など)
+#  - polymorphic: 型表示に Symbol と nil が混ざる (`:base?` のような多態の合流)
+#  - other
+require_relative "../lib/nilflow"
+require "prism"
+abort "usage: script/classify graph.db" unless ARGV[0]
+q = Nilflow::Query.new(ARGV[0])
+rows = q.nil_receivers
+defs = Hash.new { |h, path| h[path] = Prism.parse_file(path).value }
+def enclosing_def(root, line)
+  found = nil
+  stack = [root]
+  until stack.empty?
+    n = stack.pop
+    if n.is_a?(Prism::DefNode) && n.location.start_line <= line && n.location.end_line >= line
+      found = n if found.nil? || n.location.start_line > found.location.start_line
+    end
+    stack.concat(n.compact_child_nodes)
+  end
+  found
+end
+def assigns_ivar?(defn, name)
+  stack = [defn]
+  until stack.empty?
+    n = stack.pop
+    return true if (n.is_a?(Prism::InstanceVariableWriteNode) || n.is_a?(Prism::InstanceVariableOrWriteNode)) && n.name.to_s == name
+    stack.concat(n.compact_child_nodes)
+  end
+  false
+end
+tally = Hash.new(0)
+rows.each do |r|
+  cats = []
+  cats << :only_nil if r["types"] == "nil"
+  cats << :polymorphic if r["types"] =~ /\A\(?:[a-z_]+/ || r["types"] =~ /\| :[a-z_]+/
+  if r["key"]&.start_with?("@")
+    d = enclosing_def(defs[r["path"]], r["line"])
+    cats << (d && assigns_ivar?(d, r["key"]) ? :ivar_local : :ivar_param)
+  elsif r["key"].nil?
+    cats << :index_chain
+  end
+  cats << :other if cats.empty?
+  cats.each { |c| tally[c] += 1 }
+end
+puts "total #{rows.size}"
+tally.sort_by { -_2 }.each { |k, v| printf "  %-12s %4d  (%d%%)\n", k, v, 100 * v / rows.size }

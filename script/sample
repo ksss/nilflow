@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+# nil-receivers (ガード済みを除く) からランダムに N 件取り、ソース行と nil の源を添えて表示する。目視確認用。
+#   NILFLOW_ROOT=/path/to/app bundle exec script/sample graph.db [N=20] [SEED=1]
+require_relative "../lib/nilflow"
+db, n, seed = ARGV[0], (ARGV[1] || 20).to_i, (ARGV[2] || 1).to_i
+abort "usage: script/sample graph.db [N] [SEED]" unless db
+root = ENV["NILFLOW_ROOT"].to_s
+short = ->(p) { p.to_s.delete_prefix("#{root}/") }
+q = Nilflow::Query.new(db)
+q.nil_receivers.shuffle(random: Random.new(seed)).first(n).each do |r|
+  src = (File.readlines(r["path"])[r["line"] - 1].strip rescue "?")
+  edges = q.nil_origin_edges(r["recv"])
+  roots = edges.map { _1["src"] } - edges.map { _1["dst"] }
+  origins = roots.map { |id| v = q.vertex(id); "#{v['origin']}@#{v['path'] ? "#{File.basename(v['path'])}:#{v['line']}" : '-'}" }.uniq.first(3)
+  puts "#{short.(r['path'])}:#{r['line']}  .#{r['mid']}  #{r['types']}"
+  puts "    #{src[0, 105]}"
+  puts "    origin: #{origins.join(' | ')}"
+end

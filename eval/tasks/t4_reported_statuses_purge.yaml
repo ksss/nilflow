@@ -1,0 +1,17 @@
+id: t4_reported_statuses_purge
+fix_commit: cd4e10bb
+base_commit: 8474efc7
+kind: service / call-graph / data-model
+symptom: |
+  When a local account is deleted (self-service deletion), statuses that are referenced by an open
+  report are intentionally retained. However, those retained statuses are never marked as deleted,
+  so after the report is resolved they linger forever with their media attachments and stats,
+  while all other statuses of the account are removed.
+
+  The retained reported statuses should get a `deleted_at` timestamp (if not already set) during
+  account deletion, so that normal cleanup can pick them up later.
+
+  Find where account deletion purges statuses and fix it.
+ground_truth:
+  - { file: app/services/delete_account_service.rb, methods: [purge_statuses!] }
+spec: spec/services/delete_account_service_spec.rb
